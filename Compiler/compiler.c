@@ -178,8 +178,53 @@ double eval(ASTNode *node) {
             return 0;
         }
         case AST_BINARY_OP: {
-            double left = eval(node->binop.left);
-            double right = node->binop.right ? eval(node->binop.right) : 0;
+            // --- Begin string concatenation logic ---
+            ASTNode *leftNode = node->binop.left;
+            ASTNode *rightNode = node->binop.right;
+            int leftIsString = leftNode && (leftNode->type == AST_STRING || (leftNode->type == AST_IDENTIFIER && get_var(leftNode->string) && get_var(leftNode->string)->type == VAR_STRING));
+            int rightIsString = rightNode && (rightNode->type == AST_STRING || (rightNode->type == AST_IDENTIFIER && get_var(rightNode->string) && get_var(rightNode->string)->type == VAR_STRING));
+            if (strcmp(node->binop.op, "+") == 0 && (leftIsString || rightIsString)) {
+                // Get left string
+                char *leftStr = NULL;
+                if (leftIsString) {
+                    if (leftNode->type == AST_STRING) leftStr = leftNode->string;
+                    else if (leftNode->type == AST_IDENTIFIER) leftStr = get_var(leftNode->string)->str;
+                } else {
+                    // Convert left number to string
+                    char buf[64];
+                    snprintf(buf, sizeof(buf), "%g", eval(leftNode));
+                    leftStr = strdup(buf);
+                }
+                // Get right string
+                char *rightStr = NULL;
+                if (rightIsString) {
+                    if (rightNode->type == AST_STRING) rightStr = rightNode->string;
+                    else if (rightNode->type == AST_IDENTIFIER) rightStr = get_var(rightNode->string)->str;
+                } else {
+                    char buf[64];
+                    snprintf(buf, sizeof(buf), "%g", eval(rightNode));
+                    rightStr = strdup(buf);
+                }
+                // Concatenate
+                size_t len = strlen(leftStr) + strlen(rightStr) + 1;
+                char *result = malloc(len);
+                strcpy(result, leftStr);
+                strcat(result, rightStr);
+                // Store result in a static buffer for printing
+                static char static_result[1024];
+                strncpy(static_result, result, sizeof(static_result)-1);
+                static_result[sizeof(static_result)-1] = '\0';
+                free(result);
+                if (!leftIsString) free(leftStr);
+                if (!rightIsString) free(rightStr);
+                // Hack: set node type to AST_STRING for interpret
+                node->type = AST_STRING;
+                node->string = static_result;
+                return 0; // Not used for numbers
+            }
+            // --- End string concatenation logic ---
+            double left = eval(leftNode);
+            double right = rightNode ? eval(rightNode) : 0;
             if (strcmp(node->binop.op, "+") == 0) return left + right;
             if (strcmp(node->binop.op, "-") == 0) return left - right;
             if (strcmp(node->binop.op, "*") == 0) return left * right;
@@ -227,6 +272,54 @@ double eval(ASTNode *node) {
     }
 }
 
+// Helper to evaluate an ASTNode to a string (caller must free)
+char *eval_to_string(ASTNode *node) {
+    if (!node) return strdup("");
+    switch (node->type) {
+        case AST_STRING:
+            return strdup(node->string);
+        case AST_NUMBER: {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "%g", node->number);
+            return strdup(buf);
+        }
+        case AST_IDENTIFIER: {
+            Var *v = get_var(node->string);
+            if (v) {
+                if (v->type == VAR_STRING) return strdup(v->str);
+                char buf[64];
+                snprintf(buf, sizeof(buf), "%g", v->value);
+                return strdup(buf);
+            }
+            return strdup("0");
+        }
+        case AST_BINARY_OP: {
+            int leftIsString = node->binop.left && (node->binop.left->type == AST_STRING || (node->binop.left->type == AST_IDENTIFIER && get_var(node->binop.left->string) && get_var(node->binop.left->string)->type == VAR_STRING));
+            int rightIsString = node->binop.right && (node->binop.right->type == AST_STRING || (node->binop.right->type == AST_IDENTIFIER && get_var(node->binop.right->string) && get_var(node->binop.right->string)->type == VAR_STRING));
+            if (strcmp(node->binop.op, "+") == 0 && (leftIsString || rightIsString)) {
+                char *leftStr = eval_to_string(node->binop.left);
+                char *rightStr = eval_to_string(node->binop.right);
+                size_t len = strlen(leftStr) + strlen(rightStr) + 1;
+                char *result = malloc(len);
+                strcpy(result, leftStr);
+                strcat(result, rightStr);
+                free(leftStr);
+                free(rightStr);
+                return result;
+            }
+            // For non-string +, fallback to number
+            char buf[64];
+            snprintf(buf, sizeof(buf), "%g", eval(node));
+            return strdup(buf);
+        }
+        default: {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "%g", eval(node));
+            return strdup(buf);
+        }
+    }
+}
+
 void interpret(ASTNode *node) {
     if (!node) return;
     switch (node->type) {
@@ -234,21 +327,12 @@ void interpret(ASTNode *node) {
             for (int j = 0; j < node->statements.count; ++j)
                 interpret(node->statements.stmts[j]);
             break;
-        case AST_PRINT:
-            if (node->print.expr->type == AST_STRING) {
-                printf("%s\n", node->print.expr->string);
-            } else if (node->print.expr->type == AST_IDENTIFIER) {
-                Var *v = get_var(node->print.expr->string);
-                if (v) {
-                    if (v->type == VAR_STRING) printf("%s\n", v->str);
-                    else printf("%g\n", v->value);
-                } else {
-                    printf("0\n");
-                }
-            } else {
-                printf("%g\n", eval(node->print.expr));
-            }
+        case AST_PRINT: {
+            char *s = eval_to_string(node->print.expr);
+            printf("%s\n", s);
+            free(s);
             break;
+        }
         case AST_STRING:
             printf("%s\n", node->string);
             break;
