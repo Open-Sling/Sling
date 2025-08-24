@@ -1,7 +1,7 @@
 # Sling
-The official version 1 of the Sling Programming Language 
+The official valid version of the Sling Programming Language 
 # Basic coding in Sling
-All examples are written in Sling. To run do the following
+All examples are written in Sling. To do the following
 1. Clone the repo using
    ``` bash
    git clone https://github.com/Open-Sling/Sling.git
