@@ -23,12 +23,16 @@ int is_statement_start(const char *token) {
     return
         strcmp(token, "LET") == 0 ||
         strcmp(token, "PRINT") == 0 ||
+        strcmp(token, "RAISE") == 0 ||
+        strcmp(token, "WARN") == 0 ||
+        strcmp(token, "INFO") == 0 ||
         strcmp(token, "WHILE") == 0 ||
         strcmp(token, "IF") == 0 ||
         strcmp(token, "FUNC") == 0 ||
         strcmp(token, "RETURN") == 0 ||
         strcmp(token, "IMPORT") == 0 ||
         strcmp(token, "FOR") == 0 ||
+
         (strncmp(token, "IDENTIFIER ", 11) == 0);
 }
 
@@ -41,10 +45,27 @@ ASTNode *parse_factor();
 
 ASTNode *parse_factor() {
     if (current >= i) error(line, "Unexpected end of input");
+
+    if (match("MINUS")) {
+        ASTNode *right = parse_factor();
+        ASTNode *negate = malloc(sizeof(ASTNode));
+        negate->type = AST_BINARY_OP;
+        strcpy(negate->binop.op, "*");
+
+        ASTNode *minus_one = malloc(sizeof(ASTNode));
+        minus_one->type = AST_NUMBER;
+        minus_one->number = -1.0;
+
+        negate->binop.left = minus_one;
+        negate->binop.right = right;
+        return negate;
+    }
+
     if (match("LPAREN")) {
         ASTNode *expr = parse_expression();
         if (!match("RPAREN")) error(line, "Expected ')' ");
         return expr;
+
     } else if (current < i && strncmp(arr[current], "NUMBER ", 7) == 0) {
         double value = strtod(arr[current] + 7, NULL);
         ASTNode *node = malloc(sizeof(ASTNode));
@@ -52,10 +73,11 @@ ASTNode *parse_factor() {
         node->number = value;
         current++;
         return node;
+
     } else if (current < i && strncmp(arr[current], "STRING ", 7) == 0) {
         const char *start = arr[current] + 8;
         size_t len = strlen(start);
-        if (len > 0 && start[len-1] == '"') len--;
+        if (len > 0 && start[len - 1] == '"') len--;
         char *str = malloc(len + 1);
         strncpy(str, start, len);
         str[len] = '\0';
@@ -64,12 +86,11 @@ ASTNode *parse_factor() {
         node->string = str;
         current++;
         return node;
+
     } else if (current < i && strncmp(arr[current], "IDENTIFIER ", 11) == 0) {
-        // Function call or variable
         const char *name = arr[current] + 11;
         current++;
         if (current < i && strcmp(arr[current], "LPAREN") == 0) {
-            // Function call
             current++; // skip LPAREN
             ASTNode **args = malloc(sizeof(ASTNode*) * i);
             int arg_count = 0;
@@ -93,18 +114,21 @@ ASTNode *parse_factor() {
             node->string = strdup(name);
             return node;
         }
+
     } else if (current < i && strcmp(arr[current], "TRUE") == 0) {
         current++;
         ASTNode *node = malloc(sizeof(ASTNode));
         node->type = AST_NUMBER;
         node->number = 1;
         return node;
+
     } else if (current < i && strcmp(arr[current], "FALSE") == 0) {
         current++;
         ASTNode *node = malloc(sizeof(ASTNode));
         node->type = AST_NUMBER;
         node->number = 0;
         return node;
+
     } else if (current < i && strcmp(arr[current], "NOT") == 0) {
         current++;
         ASTNode *expr = parse_factor();
@@ -114,6 +138,7 @@ ASTNode *parse_factor() {
         node->binop.left = expr;
         node->binop.right = NULL;
         return node;
+
     } else {
         error(line, "Expected number, identifier, string, boolean, or '(' or function call");
         return NULL;
@@ -299,6 +324,34 @@ ASTNode *parse_statement() {
         node->type = AST_PRINT;
         node->print.expr = expr;
         return node;
+    } else if (strcmp(arr[current], "RAISE") == 0) {
+        current++;
+        if (!match("LPAREN")) error(line, "Expected '(' after raise");
+        ASTNode *expr = parse_expression();
+        if (!match("RPAREN")) error(line, "Expected ')' after raise expression");
+        ASTNode *node = malloc(sizeof(ASTNode));
+        node->type = AST_RAISE;
+        node->raise.expr = expr;
+        return node;
+    } else if (strcmp(arr[current], "WARN") == 0) {
+
+        current++;
+        if (!match("LPAREN")) error(line, "Expected '(' after warn");
+        ASTNode *expr = parse_expression();
+        if (!match("RPAREN")) error(line, "Expected ')' after warn expression");
+        ASTNode *node = malloc(sizeof(ASTNode));
+        node->type = AST_WARN;
+        node->warn.expr = expr;
+        return node;
+    } else if (strcmp(arr[current], "INFO") == 0) {
+        current++;
+        if (!match("LPAREN")) error(line, "Expected '(' after info");
+        ASTNode *expr = parse_expression();
+        if (!match("RPAREN")) error(line, "Expected ')' after info expression");
+        ASTNode *node = malloc(sizeof(ASTNode));
+        node->type = AST_INFO;
+        node->info.expr = expr;
+        return node;
     } else if (strcmp(arr[current], "WHILE") == 0) {
         current++;
         if (!match("LPAREN")) error(line, "Expected '(' after while");
@@ -464,6 +517,7 @@ void free_ast(ASTNode *node) {
             free_ast(node->ifstmt.then_branch);
             if (node->ifstmt.else_branch) free_ast(node->ifstmt.else_branch);
             break;
+
         case AST_STATEMENTS:
             for (int j = 0; j < node->statements.count; ++j)
                 free_ast(node->statements.stmts[j]);
