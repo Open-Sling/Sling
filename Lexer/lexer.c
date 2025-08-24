@@ -16,16 +16,26 @@ void add_token(const char *token) {
 void lex(const char *src) {
     const char *p = src;
     static char last_token[32] = "";
+
     while (*p) {
         if (*p == '\n') { line++; p++; continue; }
         if (isspace(*p)) { p++; continue; }
 
-        // Handle C-style comments
+        // Handle comments
         if (*p == '/' && *(p+1) == '/') {
             while (*p && *p != '\n') p++;
             continue;
         }
 
+        // Compound operators
+        if (*p == '=' && *(p + 1) == '=') {
+            add_token("EQ");
+            strcpy(last_token, "EQ");
+            p += 2;
+            continue;
+        }
+
+        // Single-character tokens
         if (*p == ';') { add_token("SEMICOLON"); strcpy(last_token, "SEMICOLON"); p++; continue; }
         if (*p == '=') { add_token("ASSIGN"); strcpy(last_token, "ASSIGN"); p++; continue; }
         if (*p == '(') { add_token("LPAREN"); strcpy(last_token, "LPAREN"); p++; continue; }
@@ -39,7 +49,9 @@ void lex(const char *src) {
         if (*p == '<') { add_token("LT"); strcpy(last_token, "LT"); p++; continue; }
         if (*p == '>') { add_token("GT"); strcpy(last_token, "GT"); p++; continue; }
         if (*p == ',') { add_token("COMMA"); strcpy(last_token, "COMMA"); p++; continue; }
+        if (*p == '.') { add_token("DOT"); strcpy(last_token, "DOT"); p++; continue; }
 
+        // Strings
         if (*p == '"') {
             const char *start = ++p;
             while (*p && *p != '"') p++;
@@ -60,10 +72,11 @@ void lex(const char *src) {
             }
             free(buf);
             free(tok);
-            p++; // skip closing quote
+            p++; // Skip closing quote
             continue;
         }
 
+        // Numbers
         if (isdigit(*p)) {
             const char *start = p;
             while (isdigit(*p)) p++;
@@ -83,8 +96,7 @@ void lex(const char *src) {
             continue;
         }
 
-        if (*p == '.') { add_token("DOT"); strcpy(last_token, "DOT"); p++; continue; }
-
+        // Identifiers / Keywords
         if (isalpha(*p) || *p == '_') {
             const char *start = p;
             while (isalnum(*p) || *p == '_') p++;
@@ -95,6 +107,9 @@ void lex(const char *src) {
 
             if (strcmp(buf, "let") == 0) { add_token("LET"); strcpy(last_token, "LET"); }
             else if (strcmp(buf, "print") == 0) { add_token("PRINT"); strcpy(last_token, "PRINT"); }
+            else if (strcmp(buf, "raise") == 0) { add_token("RAISE"); strcpy(last_token, "RAISE"); }
+            else if (strcmp(buf, "warn") == 0) { add_token("WARN"); strcpy(last_token, "WARN"); }
+            else if (strcmp(buf, "info") == 0) { add_token("INFO"); strcpy(last_token, "RETURN"); }
             else if (strcmp(buf, "while") == 0) { add_token("WHILE"); strcpy(last_token, "WHILE"); }
             else if (strcmp(buf, "if") == 0) { add_token("IF"); strcpy(last_token, "IF"); }
             else if (strcmp(buf, "else") == 0) { add_token("ELSE"); strcpy(last_token, "ELSE"); }
@@ -108,6 +123,11 @@ void lex(const char *src) {
             else if (strcmp(buf, "import") == 0) { add_token("IMPORT"); strcpy(last_token, "IMPORT"); }
             else if (strcmp(buf, "for") == 0) { add_token("FOR"); strcpy(last_token, "FOR"); }
             else if (strcmp(buf, "in") == 0) { add_token("IN"); strcpy(last_token, "IN"); }
+            // comments
+            else if (strcmp(buf, "//") == 0) {
+                while (*p && *p != '\n') p++;
+                continue; // Skip the rest of the line
+            }
             else {
                 char *tok = malloc(len + 20);
                 sprintf(tok, "IDENTIFIER %s", buf);
@@ -119,6 +139,7 @@ void lex(const char *src) {
             continue;
         }
 
+        // Unknown characters
         error(line, "Unknown character '%c' at line %d", *p, line);
         p++;
     }
