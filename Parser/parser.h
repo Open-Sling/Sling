@@ -9,6 +9,9 @@ typedef enum {
     AST_LET,
     AST_ASSIGN,
     AST_PRINT,
+    AST_RAISE,
+    AST_WARN,
+    AST_INFO,
     AST_WHILE,
     AST_IF,
     AST_STATEMENTS,
@@ -39,7 +42,15 @@ typedef struct ASTNode {
         struct {
             struct ASTNode *expr;
         } print;
-
+        struct {
+            struct ASTNode *expr;
+        } raise;
+        struct {
+            struct ASTNode *expr;
+        } warn;
+        struct {
+            struct ASTNode *expr;
+        } info;
         struct {
             struct ASTNode *cond;
             struct ASTNode *body;
@@ -83,6 +94,8 @@ typedef struct ASTNode {
             struct ASTNode *for_end;
             struct ASTNode *for_body;
         } forstmt;
+
+
     };
 } ASTNode;
 
