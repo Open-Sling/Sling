@@ -12,7 +12,10 @@ extern int i;
 
 int main(int argc, char *argv[]) {
     if (argc != 2) { error(0, "Usage: Sling <filename>"); }
-
+    if (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-v") == 0) {
+        printf("Sling Programming Language v2.0.0\n");
+        return 0;
+    }
     if (strcmp(argv[1], "--credits") == 0) {
         printf("\u00a9 2025 Sinha Ltd. All rights reserved.\n");
         printf("\u00a9 2025 Reyaansh Sinha. All rights reserved.\n");
@@ -33,6 +36,7 @@ int main(int argc, char *argv[]) {
     fclose(file);
 
     lex(code);
+
     free(code);
 
     Parse();
