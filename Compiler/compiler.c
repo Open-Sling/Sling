@@ -222,6 +222,14 @@ void interpret(ASTNode *node) {
             free(s);
             break;
         }
+        case AST_RAISE: {
+            char *msg = eval_to_string(node->raise.expr);
+            error(0, "Runtime Error: %s", msg);
+            free(msg);
+            // Optionally abort execution:
+            exit(1);
+            break;
+        }
 
         case AST_FUNC_DEF:
             add_func(node->funcdef.funcname, node);
@@ -264,7 +272,18 @@ void interpret(ASTNode *node) {
             }
             break;
         }
-
+        case AST_WARN: {
+            char *msg = eval_to_string(node->warn.expr);
+            fprintf(stderr, "Sling/Warning: %s\n", msg);
+            free(msg);
+            break;
+        }
+        case AST_INFO: {
+            char *msg = eval_to_string(node->info.expr);
+            fprintf(stderr, "Sling/Info: %s\n", msg);
+            free(msg);
+            break;
+        }
         case AST_FUNCTION_CALL:
             eval(node);
             break;
