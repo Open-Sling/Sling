@@ -11,6 +11,24 @@
 #include <ctype.h>
 #include <setjmp.h>
 
+
+typedef enum {
+    VAL_NUMBER,
+    VAL_STRING,
+    VAL_OBJECT
+} ValueType;
+
+typedef struct Value {
+    ValueType type;
+    double number;
+    char *string;
+    void *object;
+} Value;
+
+
+#include "sdk.h"   // now sdk.h can use Value
+
+
 /* ============================================================
    Globals / Tokens buffer
    ============================================================ */
@@ -144,13 +162,7 @@ typedef struct ASTNode {
 /* ============================================================
    Values, returns, and environment
    ============================================================ */
-typedef enum { VAL_NUMBER, VAL_STRING, VAL_OBJECT } ValueType;
-typedef struct {
-    ValueType type;
-    double number;
-    char *string;
-    void *object;
-} Value;
+
 
 static jmp_buf return_buf;
 static Value   return_value;
@@ -924,27 +936,45 @@ static inline void Parse(void) {
 /* ============================================================
    Evaluation / Interpreter
    ============================================================ */
+
+
+/* ============================================================
+   Helper: normalize function names
+   ============================================================ */
+
+
+/* ============================================================
+   Evaluation / Interpreter
+   ============================================================ */
 static inline char *eval_to_string(ASTNode *node);
 
 static inline Value eval(ASTNode *node) {
     if (!node) return (Value){ .type = VAL_NUMBER, .number = 0 };
 
     switch (node->type) {
-        case AST_NUMBER:   return (Value){ .type = VAL_NUMBER, .number = node->number };
-        case AST_STRING:   return (Value){ .type = VAL_STRING, .string = strdup(node->string) };
+        case AST_NUMBER:
+            return (Value){ .type = VAL_NUMBER, .number = node->number };
+
+        case AST_STRING:
+            return (Value){ .type = VAL_STRING, .string = strdup(node->string) };
+
         case AST_IDENTIFIER: {
             Var *v = get_var(node->string);
             if (v) {
-                if (v->type == VAR_STRING) return (Value){ .type = VAL_STRING, .string = strdup(v->str) };
-                else                       return (Value){ .type = VAL_NUMBER, .number = v->value };
+                if (v->type == VAR_STRING)
+                    return (Value){ .type = VAL_STRING, .string = strdup(v->str) };
+                else
+                    return (Value){ .type = VAL_NUMBER, .number = v->value };
             }
             return (Value){ .type = VAL_NUMBER, .number = 0 };
         }
+
         case AST_BINARY_OP: {
             Value left  = eval(node->binop.left);
-            Value right = node->binop.right ? eval(node->binop.right) : (Value){.type=VAL_NUMBER,.number=0};
+            Value right = node->binop.right ? eval(node->binop.right)
+                                            : (Value){ .type = VAL_NUMBER, .number = 0 };
 
-            /* string concatenation for '+' */
+            // string concatenation for '+'
             if (strcmp(node->binop.op, "+") == 0 &&
                 (left.type == VAL_STRING || right.type == VAL_STRING)) {
                 char buf[64];
@@ -953,7 +983,7 @@ static inline Value eval(ASTNode *node) {
                 char *rstr = (right.type == VAL_STRING) ? right.string :
                              (snprintf(buf, sizeof(buf), "%g", right.number), strdup(buf));
 
-                char *result = (char*)malloc(strlen(lstr)+strlen(rstr)+1);
+                char *result = (char*)malloc(strlen(lstr) + strlen(rstr) + 1);
                 strcpy(result, lstr);
                 strcat(result, rstr);
 
@@ -982,16 +1012,38 @@ static inline Value eval(ASTNode *node) {
             else if (strcmp(node->binop.op, ">=") == 0) result = (lnum >= rnum);
             else if (strcmp(node->binop.op, "==") == 0) result = (lnum == rnum);
             else if (strcmp(node->binop.op, "!=") == 0) result = (lnum != rnum);
-            else if (strcmp(node->binop.op, "&&") == 0) result = ((lnum!=0) && (rnum!=0));
-            else if (strcmp(node->binop.op, "||") == 0) result = ((lnum!=0) || (rnum!=0));
-            else if (strcmp(node->binop.op, "!")  == 0) result = (lnum==0); /* unary NOT */
+            else if (strcmp(node->binop.op, "&&") == 0) result = ((lnum != 0) && (rnum != 0));
+            else if (strcmp(node->binop.op, "||") == 0) result = ((lnum != 0) || (rnum != 0));
+            else if (strcmp(node->binop.op, "!")  == 0) result = (lnum == 0);
 
             return (Value){ .type = VAL_NUMBER, .number = result };
         }
+
         case AST_FUNCTION_CALL: {
-            /* built-in input(prompt?) -> string */
+
+            // let sling_get_native() normalize
+            SlingCFunc native = sling_get_native(node->funccall.funcname);
+
+            if (native) {;
+
+                Value *args = (Value*) malloc(sizeof(Value) * node->funccall.arg_count);
+                for (int j = 0; j < node->funccall.arg_count; j++)
+                    args[j] = eval(node->funccall.args[j]);
+
+                Value result = native(node->funccall.arg_count, args);
+
+                for (int j = 0; j < node->funccall.arg_count; j++)
+                    if (args[j].type == VAL_STRING) free(args[j].string);
+                free(args);
+
+                return result;
+            }
+
+            // === Built-in: input() ===
             if (strcmp(node->funccall.funcname, "input") == 0) {
-                char *prompt = node->funccall.arg_count > 0 ? eval_to_string(node->funccall.args[0]) : strdup("");
+                char *prompt = node->funccall.arg_count > 0
+                               ? eval_to_string(node->funccall.args[0])
+                               : strdup("");
                 if (*prompt) { printf("%s", prompt); fflush(stdout); }
                 free(prompt);
 
@@ -1001,29 +1053,47 @@ static inline Value eval(ASTNode *node) {
                 return (Value){ .type = VAL_STRING, .string = strdup(buffer) };
             }
 
+            // === User-defined Sling function ===
             ASTNode *func = get_func(node->funccall.funcname);
-            if (!func) { error(0, "Undefined function: %s", node->funccall.funcname); return (Value){.type=VAL_NUMBER,.number=0}; }
+            if (!func) {
+                error(0, "Undefined function: %s", node->funccall.funcname);
+                return (Value){ .type = VAL_NUMBER, .number = 0 };
+            }
 
             int saved_var_count = var_count;
             for (int j = 0; j < func->funcdef.param_count; ++j) {
-                Value argval = (j < node->funccall.arg_count) ? eval(node->funccall.args[j]) : (Value){.type=VAL_NUMBER,.number=0};
-                if (argval.type == VAL_STRING) set_var(func->funcdef.params[j], VAR_STRING, 0, argval.string);
-                else                           set_var(func->funcdef.params[j], VAR_NUMBER, argval.number, NULL);
-                if (argval.type == VAL_STRING) free(argval.string);
+                Value argval = (j < node->funccall.arg_count)
+                    ? eval(node->funccall.args[j])
+                    : (Value){ .type = VAL_NUMBER, .number = 0 };
+
+                if (argval.type == VAL_STRING) {
+                    set_var(func->funcdef.params[j], VAR_STRING, 0, argval.string);
+                    free(argval.string);
+                } else {
+                    set_var(func->funcdef.params[j], VAR_NUMBER, argval.number, NULL);
+                }
             }
 
-            Value result = (Value){ .type = VAL_NUMBER, .number = 0 };
-            if (setjmp(return_buf) == 0) interpret(func->funcdef.body);
-            else result = return_value;
+            Value result = { .type = VAL_NUMBER, .number = 0 };
+            if (setjmp(return_buf) == 0)
+                interpret(func->funcdef.body);
+            else
+                result = return_value;
 
             var_count = saved_var_count;
             return result;
         }
+
         default:
             return (Value){ .type = VAL_NUMBER, .number = 0 };
     }
 }
 
+
+
+/* ============================================================
+   String conversion
+   ============================================================ */
 static inline char *eval_to_string(ASTNode *node) {
     Value v = eval(node);
     if (v.type == VAL_STRING) return v.string;
@@ -1031,6 +1101,7 @@ static inline char *eval_to_string(ASTNode *node) {
     snprintf(buf, sizeof(buf), "%g", v.number);
     return strdup(buf);
 }
+
 
 static inline void interpret(ASTNode *node) {
     if (!node) return;
@@ -1122,36 +1193,53 @@ static inline void interpret(ASTNode *node) {
    Imports and toplevel driver
    ============================================================ */
 static inline void handle_import(const char *filename) {
+    const char *ext = strrchr(filename, '.');
+
+    // --- Case 1: C header module (.h) ---
+    if (ext && strcmp(ext, ".h") == 0) {
+        // Match known modules
+        if (strcmp(filename, "hello.h") == 0) {
+            extern void sling_register_module_hello(void);
+            sling_register_module_hello();
+            return;
+        }
+
+        error(0, "Unknown native module: %s", filename);
+        return;
+    }
+
+    // --- Case 2: Sling source (.sling) ---
     FILE *file = fopen(filename, "r");
-    if (!file) { error(0, "Could not import file: %s", filename); return; }
+    if (!file) {
+        error(0, "Could not import file: %s", filename);
+        return;
+    }
     fseek(file, 0, SEEK_END);
     long length = ftell(file);
     rewind(file);
+
     char *code = (char*)malloc((size_t)length + 1);
     if (!code) { fclose(file); error(0, "Out of memory reading %s", filename); }
     fread(code, 1, (size_t)length, file);
     code[length] = '\0';
     fclose(file);
 
-    int old_i = i;
-    int old_current = current;
-    int old_line = line;
-
+    int old_i = i, old_current = current, old_line = line;
     lex(code);
     free(code);
 
-    int import_start = old_i;
-    int import_end = i;
+    int import_start = old_i, import_end = i;
 
     current = import_start;
     ASTNode *root = parse_statements();
-    /* Register only function defs */
+
+    // Only keep function definitions
     if (root && root->type == AST_STATEMENTS) {
         for (int j = 0; j < root->statements.count; ++j) {
             ASTNode *stmt = root->statements.stmts[j];
             if (stmt && stmt->type == AST_FUNC_DEF) {
                 add_func(stmt->funcdef.funcname, stmt);
-                root->statements.stmts[j] = NULL; /* don't free that def; retained */
+                root->statements.stmts[j] = NULL;
             }
         }
     }
@@ -1160,8 +1248,9 @@ static inline void handle_import(const char *filename) {
     current = old_current;
     line    = old_line;
 
-    /* reclaim tokens from import */
-    for (int j = import_start; j < import_end; ++j) { free(arr[j]); arr[j] = NULL; }
+    for (int j = import_start; j < import_end; ++j) {
+        free(arr[j]); arr[j] = NULL;
+    }
     i = old_i;
 }
 
