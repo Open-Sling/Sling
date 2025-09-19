@@ -1256,6 +1256,11 @@ static inline void handle_import(const char *filename) {
 
 static inline void run_script(const char *src) {
     if (!src || !*src) { error(0, "No source code provided"); return; }
+    if (strcmp(src, "-v") == 0) {
+        printf("Sling Version 3.0.0\n");
+        return;
+    }
+
     /* reset global token stream */
     for (int t = 0; t < i; ++t) { free(arr[t]); arr[t] = NULL; }
     i = 0; current = 0; line = 1;
