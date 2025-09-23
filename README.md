@@ -26,3 +26,4 @@ To Uninstall Sling, Run
 ```bahs
 ./uninstall.sh
 ```
+For examples on coding in Sling, Check ot the Examples dir.
