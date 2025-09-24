@@ -25,6 +25,15 @@ typedef struct Value {
     void *object;
 } Value;
 
+/* Generic object types used by the runtime (arrays etc) */
+typedef enum { OBJ_ARRAY } ObjectType;
+typedef struct {
+    ObjectType type;
+    int count;
+    int capacity;
+    Value *items;
+} ObjArray;
+
 
 #include "sdk.h"   // now sdk.h can use Value
 
@@ -98,6 +107,9 @@ typedef enum {
     AST_RETURN,
     AST_IMPORT,
     AST_FOR
+    ,AST_ARRAY_LITERAL
+    ,AST_INDEX_EXPR
+    ,AST_INDEX_ASSIGN
 } ASTNodeType;
 
 typedef struct ASTNode {
@@ -158,6 +170,25 @@ typedef struct ASTNode {
             struct ASTNode *for_end;
             struct ASTNode *for_body;
         } forstmt;
+
+        /* array literal: [expr, expr, ...] */
+        struct {
+            struct ASTNode **elements;
+            int count;
+        } arraylit;
+
+        /* index expression: target[index] */
+        struct {
+            struct ASTNode *target;
+            struct ASTNode *index;
+        } indexexpr;
+
+        /* index assignment: target[index] = value */
+        struct {
+            struct ASTNode *target; /* typically an identifier */
+            struct ASTNode *index;
+            struct ASTNode *value;
+        } indexassign;
     };
 } ASTNode;
 
@@ -170,12 +201,13 @@ static jmp_buf return_buf;
 static Value   return_value;
 
 /* Simple variable table */
-typedef enum { VAR_NUMBER, VAR_STRING } VarType;
+typedef enum { VAR_NUMBER, VAR_STRING, VAR_OBJECT } VarType;
 typedef struct {
     char  *name;
     VarType type;
     double value;
     char  *str;
+    void  *obj; /* for VAR_OBJECT */
 } Var;
 
 static Var vars[1024];
@@ -185,6 +217,36 @@ static inline Var *get_var(const char *name) {
     for (int j = 0; j < var_count; ++j)
         if (strcmp(vars[j].name, name) == 0) return &vars[j];
     return NULL;
+}
+static inline void free_object(void *obj) {
+    if (!obj) return;
+    ObjArray *oa = (ObjArray*)obj;
+    if (oa->type == OBJ_ARRAY) {
+        for (int j = 0; j < oa->count; ++j) {
+            if (oa->items[j].type == VAL_STRING) free(oa->items[j].string);
+        }
+        free(oa->items);
+    }
+    free(oa);
+}
+
+static inline void set_var_object(const char *name, void *obj) {
+    for (int j = 0; j < var_count; ++j) {
+        if (strcmp(vars[j].name, name) == 0) {
+            if (vars[j].type == VAR_OBJECT) free_object(vars[j].obj);
+            vars[j].type = VAR_OBJECT;
+            vars[j].obj = obj;
+            free(vars[j].str); vars[j].str = NULL;
+            vars[j].value = 0;
+            return;
+        }
+    }
+    vars[var_count].name = strdup(name);
+    vars[var_count].type = VAR_OBJECT;
+    vars[var_count].obj  = obj;
+    vars[var_count].value = 0;
+    vars[var_count].str = NULL;
+    var_count++;
 }
 static inline void set_var(const char *name, VarType type, double value, const char *str) {
     for (int j = 0; j < var_count; ++j) {
@@ -294,6 +356,8 @@ static inline void lex(const char *src) {
         if (*p == '<') { add_token("LT");        strcpy(last_token,"LT");        p++; continue; }
         if (*p == '>') { add_token("GT");        strcpy(last_token,"GT");        p++; continue; }
         if (*p == ',') { add_token("COMMA");     strcpy(last_token,"COMMA");     p++; continue; }
+        if (*p == '[') { add_token("LBRACKET"); strcpy(last_token,"LBRACKET"); p++; continue; }
+        if (*p == ']') { add_token("RBRACKET"); strcpy(last_token,"RBRACKET"); p++; continue; }
         if (*p == '.') { add_token("DOT");       strcpy(last_token,"DOT");       p++; continue; }
 
         /* string literal */
@@ -423,7 +487,26 @@ static inline ASTNode *parse_factor(void) {
         ASTNode *expr = parse_expression();
         if (!match("RPAREN")) error(line, "Expected ')'");
         return expr;
+    }
 
+    if (current < i && strcmp(arr[current], "LBRACKET") == 0) {
+        /* array literal (as expression) */
+        current++; /* skip LBRACKET */
+        ASTNode **elems = (ASTNode**)malloc(sizeof(ASTNode*) * (size_t)i);
+        int ec = 0;
+        if (current < i && strcmp(arr[current], "RBRACKET") != 0) {
+            while (1) {
+                elems[ec++] = parse_expression();
+                if (current < i && strcmp(arr[current], "COMMA") == 0) { current++; continue; }
+                break;
+            }
+        }
+        if (!match("RBRACKET")) error(line, "Expected ']' after array literal");
+        ASTNode *node = (ASTNode*)malloc(sizeof(ASTNode));
+        node->type = AST_ARRAY_LITERAL;
+        node->arraylit.elements = elems;
+        node->arraylit.count = ec;
+        return node;
     } else if (current < i && strncmp(arr[current], "NUMBER ", 7) == 0) {
         double value = strtod(arr[current] + 7, NULL);
         ASTNode *node = (ASTNode*)malloc(sizeof(ASTNode));
@@ -470,6 +553,18 @@ static inline ASTNode *parse_factor(void) {
             ASTNode *node = (ASTNode*)malloc(sizeof(ASTNode));
             node->type = AST_IDENTIFIER;
             node->string = strdup(name);
+            /* handle indexing like ident[expr] */
+            if (current < i && strcmp(arr[current], "LBRACKET") == 0) {
+                ASTNode *idx = NULL;
+                current++; /* skip LBRACKET */
+                idx = parse_expression();
+                if (!match("RBRACKET")) error(line, "Expected ']' after index");
+                ASTNode *nidx = (ASTNode*)malloc(sizeof(ASTNode));
+                nidx->type = AST_INDEX_EXPR;
+                nidx->indexexpr.target = node;
+                nidx->indexexpr.index = idx;
+                return nidx;
+            }
             return node;
         }
 
@@ -499,6 +594,23 @@ static inline ASTNode *parse_factor(void) {
         error(line, "Expected expression");
         return NULL;
     }
+}
+
+/* parse index assignment like a[expr] = value */
+static inline ASTNode *try_parse_index_assignment(char *identname) {
+    /* current is at LBRACKET already consumed by caller */
+    ASTNode *idx = parse_expression();
+    if (!match("RBRACKET")) error(line, "Expected ']' after index");
+    if (!match("ASSIGN")) { /* not an assignment */ return NULL; }
+    ASTNode *val = parse_expression();
+    ASTNode *node = (ASTNode*)malloc(sizeof(ASTNode));
+    node->type = AST_INDEX_ASSIGN;
+    ASTNode *target = (ASTNode*)malloc(sizeof(ASTNode));
+    target->type = AST_IDENTIFIER; target->string = strdup(identname);
+    node->indexassign.target = target;
+    node->indexassign.index = idx;
+    node->indexassign.value = val;
+    return node;
 }
 
 static inline ASTNode *parse_term(void) {
@@ -676,6 +788,8 @@ static inline ASTNode *parse_statement(void) {
         return NULL;
     }
 
+    
+
     if (strcmp(arr[current], "PRINT") == 0) {
         current++;
         if (!match("LPAREN")) error(line, "Expected '(' after print");
@@ -842,6 +956,26 @@ static inline ASTNode *parse_statement(void) {
             current--; /* step back so parse_factor sees IDENTIFIER */
             ASTNode *call = parse_factor();
             return call;
+        } else if (current < i && strcmp(arr[current], "LBRACKET") == 0) {
+            /* possibly index assignment like a[expr] = value */
+            /* consume LBRACKET */
+            current++;
+            ASTNode *idx = parse_expression();
+            if (!match("RBRACKET")) error(line, "Expected ']' after index");
+            if (current < i && strcmp(arr[current], "ASSIGN") == 0) {
+                current++; /* consume ASSIGN */
+                ASTNode *val = parse_expression();
+                ASTNode *node = (ASTNode*)malloc(sizeof(ASTNode));
+                node->type = AST_INDEX_ASSIGN;
+                ASTNode *target = (ASTNode*)malloc(sizeof(ASTNode));
+                target->type = AST_IDENTIFIER; target->string = varname;
+                node->indexassign.target = target;
+                node->indexassign.index = idx;
+                node->indexassign.value = val;
+                return node;
+            }
+            error(line, "Expected '=' after index assignment");
+            return NULL;
         } else {
             error(line, "Expected '=' or '(' after identifier");
             return NULL;
@@ -873,8 +1007,23 @@ static inline void free_ast(ASTNode *node) {
     if (!node) return;
     switch (node->type) {
         case AST_STRING:
+            free(node->string);
+            break;
         case AST_IDENTIFIER:
             free(node->string);
+            break;
+        case AST_ARRAY_LITERAL:
+            for (int j = 0; j < node->arraylit.count; ++j) free_ast(node->arraylit.elements[j]);
+            free(node->arraylit.elements);
+            break;
+        case AST_INDEX_EXPR:
+            free_ast(node->indexexpr.target);
+            free_ast(node->indexexpr.index);
+            break;
+        case AST_INDEX_ASSIGN:
+            free_ast(node->indexassign.target);
+            free_ast(node->indexassign.index);
+            free_ast(node->indexassign.value);
             break;
         case AST_LET:
         case AST_ASSIGN:
@@ -965,13 +1114,64 @@ static inline Value eval(ASTNode *node) {
             if (v) {
                 if (v->type == VAR_STRING)
                     return (Value){ .type = VAL_STRING, .string = strdup(v->str) };
+                else if (v->type == VAR_OBJECT)
+                    return (Value){ .type = VAL_OBJECT, .object = v->obj };
                 else
                     return (Value){ .type = VAL_NUMBER, .number = v->value };
             }
             return (Value){ .type = VAL_NUMBER, .number = 0 };
         }
 
-        case AST_BINARY_OP: {
+        case AST_ARRAY_LITERAL: {
+            ObjArray *oa = (ObjArray*)malloc(sizeof(ObjArray));
+            oa->type = OBJ_ARRAY;
+            oa->count = node->arraylit.count;
+            oa->capacity = node->arraylit.count;
+            oa->items = (Value*)malloc(sizeof(Value) * (oa->capacity ? oa->capacity : 0));
+            for (int j = 0; j < node->arraylit.count; ++j) {
+                oa->items[j] = eval(node->arraylit.elements[j]);
+            }
+            return (Value){ .type = VAL_OBJECT, .object = oa };
+        }
+
+        case AST_INDEX_EXPR: {
+            Value target = eval(node->indexexpr.target);
+            Value idxv = eval(node->indexexpr.index);
+            int idx = (int)idxv.number;
+            if (target.type != VAL_OBJECT) { error(0, "index: target is not array"); return (Value){ .type = VAL_NUMBER, .number = 0 }; }
+            ObjArray *oa = (ObjArray*)target.object;
+            if (!oa || oa->type != OBJ_ARRAY) { error(0, "index: not an array"); return (Value){ .type = VAL_NUMBER, .number = 0 }; }
+            if (idx < 0 || idx >= oa->count) return (Value){ .type = VAL_NUMBER, .number = 0 };
+            return oa->items[idx];
+        }
+
+        case AST_INDEX_ASSIGN: {
+            /* target must be identifier */
+            if (node->indexassign.target->type != AST_IDENTIFIER) { error(0, "index assign: target must be identifier"); return (Value){ .type = VAL_NUMBER, .number = 0 }; }
+            Var *v = get_var(node->indexassign.target->string);
+            if (!v || v->type != VAR_OBJECT) { error(0, "index assign: variable is not array"); return (Value){ .type = VAL_NUMBER, .number = 0 }; }
+            ObjArray *oa = (ObjArray*)v->obj;
+            Value idxv = eval(node->indexassign.index);
+            int idx = (int)idxv.number;
+            Value val = eval(node->indexassign.value);
+            if (idx < 0) error(0, "index assign: negative index");
+            if (idx >= oa->count) {
+                /* extend array to fit index */
+                while (idx >= oa->capacity) {
+                    int newcap = oa->capacity ? oa->capacity * 2 : 4;
+                    oa->items = (Value*)realloc(oa->items, sizeof(Value) * newcap);
+                    oa->capacity = newcap;
+                }
+                for (int k = oa->count; k <= idx; ++k) { oa->items[k].type = VAL_NUMBER; oa->items[k].number = 0; }
+                oa->count = idx + 1;
+            }
+            /* free previous string if needed */
+            if (oa->items[idx].type == VAL_STRING) free(oa->items[idx].string);
+            oa->items[idx] = val;
+            return (Value){ .type = VAL_NUMBER, .number = 1 };
+        }
+
+    case AST_BINARY_OP: {
             Value left  = eval(node->binop.left);
             Value right = node->binop.right ? eval(node->binop.right)
                                             : (Value){ .type = VAL_NUMBER, .number = 0 };
@@ -1022,6 +1222,31 @@ static inline Value eval(ASTNode *node) {
         }
 
         case AST_FUNCTION_CALL: {
+            // Built-ins: append(array, value) and len(array)
+            if (strcmp(node->funccall.funcname, "append") == 0) {
+                if (node->funccall.arg_count != 2) { error(0, "append requires 2 args"); return (Value){ .type = VAL_NUMBER, .number = 0 }; }
+                Value a = eval(node->funccall.args[0]);
+                Value v = eval(node->funccall.args[1]);
+                if (a.type != VAL_OBJECT) { error(0, "append: first arg must be array"); return (Value){ .type = VAL_NUMBER, .number = 0 }; }
+                ObjArray *oa = (ObjArray*)a.object;
+                if (!oa || oa->type != OBJ_ARRAY) { error(0, "append: not an array"); return (Value){ .type = VAL_NUMBER, .number = 0 }; }
+                if (oa->count >= oa->capacity) {
+                    int newcap = oa->capacity ? oa->capacity * 2 : 4;
+                    oa->items = (Value*)realloc(oa->items, sizeof(Value) * newcap);
+                    oa->capacity = newcap;
+                }
+                /* transfer ownership of string if present */
+                oa->items[oa->count++] = v;
+                return (Value){ .type = VAL_NUMBER, .number = 1 };
+            }
+            if (strcmp(node->funccall.funcname, "len") == 0) {
+                if (node->funccall.arg_count != 1) { error(0, "len requires 1 arg"); return (Value){ .type = VAL_NUMBER, .number = 0 }; }
+                Value a = eval(node->funccall.args[0]);
+                if (a.type != VAL_OBJECT) return (Value){ .type = VAL_NUMBER, .number = 0 };
+                ObjArray *oa = (ObjArray*)a.object;
+                if (!oa || oa->type != OBJ_ARRAY) return (Value){ .type = VAL_NUMBER, .number = 0 };
+                return (Value){ .type = VAL_NUMBER, .number = (double)oa->count };
+            }
 
             // let sling_get_native() normalize
             SlingCFunc native = sling_get_native(node->funccall.funcname);
@@ -1136,6 +1361,9 @@ static inline void interpret(ASTNode *node) {
             if (val.type == VAL_STRING) {
                 set_var(node->var.varname, VAR_STRING, 0, val.string);
                 free(val.string);
+            } else if (val.type == VAL_OBJECT) {
+                /* transfer ownership of object to variable */
+                set_var_object(node->var.varname, val.object);
             } else {
                 set_var(node->var.varname, VAR_NUMBER, val.number, NULL);
             }
@@ -1163,8 +1391,10 @@ static inline void interpret(ASTNode *node) {
             }
             break;
         }
-
         case AST_FUNCTION_CALL:
+        case AST_ARRAY_LITERAL:
+        case AST_INDEX_EXPR:
+        case AST_INDEX_ASSIGN:
             (void)eval(node); /* result ignored in statement context */
             break;
 
