@@ -1200,23 +1200,45 @@ static inline Value eval(ASTNode *node) {
             double lnum = (left.type == VAL_NUMBER) ? left.number : strtod(left.string, NULL);
             double rnum = (right.type == VAL_NUMBER) ? right.number : strtod(right.string, NULL);
 
+            double result = 0;
+
+            /* If either side is a string and we're doing equality/inequality,
+               compare as strings rather than numeric conversion. For other
+               ops, fall back to numeric semantics. */
+            if (strcmp(node->binop.op, "==") == 0) {
+                if (left.type == VAL_STRING || right.type == VAL_STRING) {
+                    char lb[64], rb[64];
+                    const char *ls = (left.type == VAL_STRING) ? left.string : (snprintf(lb, sizeof(lb), "%g", lnum), lb);
+                    const char *rs = (right.type == VAL_STRING) ? right.string : (snprintf(rb, sizeof(rb), "%g", rnum), rb);
+                    result = (strcmp(ls, rs) == 0);
+                } else {
+                    result = (lnum == rnum);
+                }
+            } else if (strcmp(node->binop.op, "!=") == 0) {
+                if (left.type == VAL_STRING || right.type == VAL_STRING) {
+                    char lb[64], rb[64];
+                    const char *ls = (left.type == VAL_STRING) ? left.string : (snprintf(lb, sizeof(lb), "%g", lnum), lb);
+                    const char *rs = (right.type == VAL_STRING) ? right.string : (snprintf(rb, sizeof(rb), "%g", rnum), rb);
+                    result = (strcmp(ls, rs) != 0);
+                } else {
+                    result = (lnum != rnum);
+                }
+            } else {
+                if      (strcmp(node->binop.op, "+")  == 0) result = lnum + rnum;
+                else if (strcmp(node->binop.op, "-")  == 0) result = lnum - rnum;
+                else if (strcmp(node->binop.op, "*")  == 0) result = lnum * rnum;
+                else if (strcmp(node->binop.op, "/")  == 0) result = lnum / rnum;
+                else if (strcmp(node->binop.op, "<")  == 0) result = (lnum <  rnum);
+                else if (strcmp(node->binop.op, ">")  == 0) result = (lnum >  rnum);
+                else if (strcmp(node->binop.op, "<=") == 0) result = (lnum <= rnum);
+                else if (strcmp(node->binop.op, ">=") == 0) result = (lnum >= rnum);
+                else if (strcmp(node->binop.op, "&&") == 0) result = ((lnum != 0) && (rnum != 0));
+                else if (strcmp(node->binop.op, "||") == 0) result = ((lnum != 0) || (rnum != 0));
+                else if (strcmp(node->binop.op, "!")  == 0) result = (lnum == 0);
+            }
+
             if (left.type == VAL_STRING)  free(left.string);
             if (right.type == VAL_STRING) free(right.string);
-
-            double result = 0;
-            if      (strcmp(node->binop.op, "+")  == 0) result = lnum + rnum;
-            else if (strcmp(node->binop.op, "-")  == 0) result = lnum - rnum;
-            else if (strcmp(node->binop.op, "*")  == 0) result = lnum * rnum;
-            else if (strcmp(node->binop.op, "/")  == 0) result = lnum / rnum;
-            else if (strcmp(node->binop.op, "<")  == 0) result = (lnum <  rnum);
-            else if (strcmp(node->binop.op, ">")  == 0) result = (lnum >  rnum);
-            else if (strcmp(node->binop.op, "<=") == 0) result = (lnum <= rnum);
-            else if (strcmp(node->binop.op, ">=") == 0) result = (lnum >= rnum);
-            else if (strcmp(node->binop.op, "==") == 0) result = (lnum == rnum);
-            else if (strcmp(node->binop.op, "!=") == 0) result = (lnum != rnum);
-            else if (strcmp(node->binop.op, "&&") == 0) result = ((lnum != 0) && (rnum != 0));
-            else if (strcmp(node->binop.op, "||") == 0) result = ((lnum != 0) || (rnum != 0));
-            else if (strcmp(node->binop.op, "!")  == 0) result = (lnum == 0);
 
             return (Value){ .type = VAL_NUMBER, .number = result };
         }
