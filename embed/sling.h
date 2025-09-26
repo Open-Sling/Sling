@@ -10,6 +10,7 @@
 #include <stdarg.h>
 #include <ctype.h>
 #include <setjmp.h>
+#include <dlfcn.h>
 
 
 typedef enum {
@@ -1451,12 +1452,41 @@ static inline void handle_import(const char *filename) {
 
     // --- Case 1: C header module (.h) ---
     if (ext && strcmp(ext, ".h") == 0) {
-        // Match known modules
-        if (strcmp(filename, "hello.h") == 0) {
-            extern void sling_register_module_hello(void);
-            sling_register_module_hello();
-            return;
+        /* Dynamically look up a registration function named
+           sling_register_module_<basename> where <basename> is the
+           header filename without directory or .h, normalized to
+           alphanumerics/underscores. This allows any compiled-in
+           native module to register itself without special-casing.
+        */
+        const char *base = strrchr(filename, '/');
+        base = base ? base + 1 : filename;
+        size_t blen = strlen(base);
+        char mod[256];
+        if (blen >= sizeof(mod)) blen = sizeof(mod) - 1;
+        memcpy(mod, base, blen);
+        mod[blen] = '\0';
+        /* strip trailing .h */
+        if (blen > 2 && strcmp(mod + blen - 2, ".h") == 0) mod[blen - 2] = '\0';
+
+        /* normalize into identifier characters */
+        char clean[256];
+        size_t ci = 0;
+        for (size_t j = 0; j < strlen(mod) && ci + 1 < sizeof(clean); ++j) {
+            char c = mod[j];
+            clean[ci++] = (isalnum((unsigned char)c) ? c : '_');
         }
+        clean[ci] = '\0';
+
+        char sym[512];
+        snprintf(sym, sizeof(sym), "sling_register_module_%s", clean);
+
+        void (*init_func)(void) = (void(*)(void)) dlsym(RTLD_DEFAULT, sym);
+        if (init_func) { init_func(); return; }
+
+        /* Fallback: try the raw mod name (some modules use dots or other chars) */
+        snprintf(sym, sizeof(sym), "sling_register_module_%s", mod);
+        init_func = (void(*)(void)) dlsym(RTLD_DEFAULT, sym);
+        if (init_func) { init_func(); return; }
 
         error(0, "Unknown native module: %s", filename);
         return;
