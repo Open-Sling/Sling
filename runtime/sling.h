@@ -271,7 +271,7 @@ static inline void set_var(const char *name, VarType type, double value, const c
 }
 
 /* Simple function table */
-#define MAX_FUNCS 128
+#define MAX_FUNCS 16384
 typedef struct {
     char    *name;
     ASTNode *def;   /* points to AST_FUNC_DEF node */

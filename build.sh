@@ -48,8 +48,4 @@ fi
 # Clean up object files
 rm -f sling.o module_stubs.o
 
-# Optional verification: run hello test if present
-if [ -f examples/hello_test.sling ]; then
-    echo "Running examples/hello_test.sling with installed Sling to verify native module..."
-    /usr/local/bin/Sling examples/hello_test.sling || true
-fi
+echo "Sling build script finished."

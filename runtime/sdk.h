@@ -25,7 +25,7 @@ typedef struct {
 /* ============================================================
    Globals (ONE copy across all .c files)
    ============================================================ */
-#define MAX_NATIVE_FUNCS 256
+#define MAX_NATIVE_FUNCS 16384
 #define MAX_MODULES      64
 
 // Declare as extern by default
